@@ -1,0 +1,21 @@
+name: Update InTax Rate
+
+on:
+  schedule:
+    # Runs at 20:05 UTC daily — adjust to your local time
+    # New Zealand Daylight Time (UTC+13) → 20:05 UTC = 9:05 AM NZDT
+    - cron: '5 20 * * *'
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm install
+      - run: node updateRate.js
+        env:
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
