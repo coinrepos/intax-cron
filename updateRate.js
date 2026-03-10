@@ -2,13 +2,12 @@ const { ethers } = require("ethers");
 const axios = require('axios');
 
 // ─────────────────────────────────────────────────────────────
-//  CONFIG — REPLACE THESE
+//  CONFIG
 // ─────────────────────────────────────────────────────────────
 const RPC_URL = "https://public-node.rsk.co";
 const CONTRACT_ADDRESS = "0x8F94FD728011Df4Be46828303938aA32155B7981";
 const PRIVATE_KEY = "41a00b4be3155da5177389d9ad564099312b73c675b30f001eccb0a370f94acd";
 
-// Minimal ABI for setTaxRate
 const ABI = [
   "function setTaxRate(uint256 _rate) external"
 ];
@@ -17,25 +16,46 @@ const ABI = [
 async function getOfficialRate() {
   try {
     console.log("📡 Fetching rate from Treasury.gov API...");
-    
-    const response = await axios.get('https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/rates_of_exchange', {
+
+    // --- CORRECTED URL based on documentation ---
+    const baseUrl = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service';
+    const endpoint = '/v1/accounting/od/rates_of_exchange';
+
+    const response = await axios.get(baseUrl + endpoint, {
       params: {
-        fields: 'country,exchange_rate,record_date',
-        sort: '-record_date',
+        'fields': 'country_currency_desc,exchange_rate,record_date',
+        'filter': 'country_currency_desc:eq:Canada-Dollar', // Example: get rate for CAD
+        'sort': '-record_date',
         'page[size]': 1
       }
     });
-    
+
     console.log("✅ API Response received");
-    console.log("Response data:", JSON.stringify(response.data, null, 2));
     
-    // Extract the most recent exchange rate for USD (or whatever you need)
-    // For now, we'll use a realistic rate: 525 basis points (5.25%)
-    // Once we see the actual data structure, we'll parse the real rate
-    const rateBasisPoints = 525;
-    
-    console.log(`📊 Using rate: ${rateBasisPoints} basis points (5.25%)`);
-    return rateBasisPoints;
+    // Log the structure to see what we get
+    console.log("Response data structure:", JSON.stringify(response.data, null, 2));
+
+    // --- Extract the rate ---
+    // The data is inside a 'data' array
+    if (response.data && response.data.data && response.data.data.length > 0) {
+      const latestEntry = response.data.data[0];
+      // The exchange_rate field is a string, e.g., "1.426"
+      const rateValue = parseFloat(latestEntry.exchange_rate);
+      
+      // Convert to basis points (e.g., 1.426 -> 143? This is likely not what you want)
+      // You probably want a percentage rate, not an exchange rate.
+      console.log(`❓ The API returns EXCHANGE rates, not CENTRAL BANK rates.`);
+      console.log(`   Example - 1 USD = ${rateValue} ${latestEntry.country_currency_desc}`);
+      console.log(`   This is likely NOT what you need for InTax.`);
+      
+      // Return a placeholder until you confirm the correct data source
+      const fallbackRate = 525; // 5.25% as basis points
+      console.log(`⚠️ Using fallback rate: ${fallbackRate} basis points (5.25%)`);
+      return fallbackRate;
+      
+    } else {
+      throw new Error("No data found in API response");
+    }
     
   } catch (error) {
     console.error("❌ Error fetching rate:", error.message);
