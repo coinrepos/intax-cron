@@ -15,9 +15,10 @@ const ABI = [
 
 async function getOfficialRate() {
   try {
-    // Using a free public API for US Federal Funds Rate
-    // This returns the rate as a percentage (e.g., 5.25 for 5.25%)
-    const response = await fetch('https://api.stlouisfed.org/fred/series/observations?series_id=FEDFUNDS&api_key=0a53a7b8471a3adfc0a18e093b22b2c4&file_type=json&sort_order=desc&limit=1');
+    // Using Treasury.gov API - no key required, very reliable
+    // This returns exchange rates, but we'll use it as a demo
+    // You can replace this with any central bank API
+    const response = await fetch('https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/rates_of_exchange?fields=country,exchange_rate,record_date&sort=-record_date&page[size]=1');
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -25,15 +26,14 @@ async function getOfficialRate() {
     
     const data = await response.json();
     
-    // Extract the latest rate from FRED response
-    const latestObservation = data.observations[0];
-    const ratePercent = parseFloat(latestObservation.value);
+    // Log the full response so you can see what's available
+    console.log("API Response:", JSON.stringify(data, null, 2));
     
-    // Convert percentage to basis points (e.g., 5.25% = 525 basis points)
-    const rateBasisPoints = Math.round(ratePercent * 100);
+    // For now, we'll use a fixed rate of 525 (5.25%)
+    // Once you see the API response, we can wire up the actual rate
+    const rateBasisPoints = 525; // 5.25% as basis points
     
-    console.log(`Raw rate from FRED: ${ratePercent}%`);
-    console.log(`Converted to basis points: ${rateBasisPoints}`);
+    console.log(`Using rate: ${rateBasisPoints} basis points (5.25%)`);
     
     return rateBasisPoints;
   } catch (error) {
