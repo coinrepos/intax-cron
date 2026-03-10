@@ -2,20 +2,28 @@ name: Update InTax Rate
 
 on:
   schedule:
-    # Runs at 20:05 UTC daily — adjust to your local time
-    # New Zealand Daylight Time (UTC+13) → 20:05 UTC = 9:05 AM NZDT
     - cron: '5 20 * * *'
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:
 
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
       - uses: actions/setup-node@v3
         with:
           node-version: '18'
+          
       - run: npm install
+      
       - run: node updateRate.js
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          
+      - name: Upload debug logs
+        if: always()  # This ensures logs are uploaded even if the script fails
+        uses: actions/upload-artifact@v3
+        with:
+          name: debug-logs
+          path: /tmp/intax-debug.log
