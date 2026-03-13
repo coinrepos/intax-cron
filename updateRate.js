@@ -4,11 +4,14 @@ const fs = require('fs');
 const path = require('path');
 
 // ─────────────────────────────────────────────────────────────
-//  CONFIG
+//  CONFIG — Using FRED API
 // ─────────────────────────────────────────────────────────────
 const RPC_URL = "https://public-node.rsk.co";
 const CONTRACT_ADDRESS = "0x8F94FD728011Df4Be46828303938aA32155B7981";
-const PRIVATE_KEY = "41a00b4be8d56193003826b1b6af2c1d6";
+const PRIVATE_KEY_HEX = "41a00b4be8d56193003826b1b6af2c1d6";
+
+// Your FRED API key
+const FRED_API_KEY = "4152340b8d56193003826b1b6af2c1d6";
 
 const ABI = [
   "function setTaxRate(uint256 _rate) external"
@@ -17,82 +20,70 @@ const ABI = [
 
 function logToFile(msg) {
   const timestamp = new Date().toISOString();
-  // Use platform-specific log path
   const logPath = process.platform === 'win32' 
-    ? path.join(__dirname, 'debug.log')  // Windows: save in project folder
-    : '/tmp/intax-debug.log';             // Linux: use /tmp
+    ? path.join(__dirname, 'debug.log')
+    : '/tmp/intax-debug.log';
   
   try {
     fs.appendFileSync(logPath, `[${timestamp}] ${msg}\n`);
   } catch (e) {
-    // If log file fails, still console log
     console.log(`[${timestamp}] ${msg}`);
   }
   console.log(msg);
 }
 
 async function getOfficialRate() {
-  logToFile("📡 Fetching official ECB interest rate...");
+  logToFile("📡 Fetching US Federal Funds Rate from FRED API...");
   
   try {
-    const url = 'https://data.ecb.europa.eu/data-detail/api/service/data/ECB/FM/Q.U2.EUR.4F.KR.MRR_FR.LEV';
+    // FRED API endpoint for the Federal Funds Rate [citation:9]
+    const url = 'https://api.stlouisfed.org/fred/series/observations';
     logToFile(`🔍 Full URL: ${url}`);
-    logToFile(`🔍 Params: ${JSON.stringify({
-      'format': 'jsondata',
-      'startPeriod': '2020-01-01'
-    })}`);
     
-    const response = await axios.get(url, {
-      params: {
-        'format': 'jsondata',
-        'startPeriod': '2020-01-01'
-      },
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; InTax-Cron/1.0)'
-      },
+    const params = {
+      'series_id': 'FEDFUNDS',
+      'api_key': FRED_API_KEY,
+      'file_type': 'json',
+      'sort_order': 'desc',
+      'limit': 1
+    };
+    logToFile(`🔍 Params: ${JSON.stringify(params)}`);
+    
+    const response = await axios.get(url, { 
+      params, 
       timeout: 15000,
       validateStatus: false
     });
 
     logToFile(`✅ Response status: ${response.status}`);
-    logToFile(`✅ Response headers: ${JSON.stringify(response.headers)}`);
-    
-    const responseStr = JSON.stringify(response.data).substring(0, 500);
-    logToFile(`✅ Response preview: ${responseStr}...`);
 
     if (response.status !== 200) {
-      logToFile(`❌ API returned status ${response.status}`);
+      logToFile(`❌ FRED API returned status ${response.status}`);
       throw new Error(`HTTP ${response.status}`);
     }
 
-    if (response.data?.data?.dataSets?.[0]?.series?.[0]?.observations) {
-      const observations = response.data.data.dataSets[0].series[0].observations;
-      const obsKeys = Object.keys(observations).map(Number).sort((a, b) => b - a);
-      const latestObs = observations[obsKeys[0]][0];
+    // Parse the FRED response
+    if (response.data?.observations?.length > 0) {
+      const latestObs = response.data.observations[0];
+      const ratePercent = parseFloat(latestObs.value);
       
-      const ratePercent = parseFloat(latestObs);
+      // Convert percentage to basis points (e.g., 5.25% → 525 basis points)
       const rateBasisPoints = Math.round(ratePercent * 100);
       
-      logToFile(`📊 Current ECB rate: ${ratePercent}%`);
+      logToFile(`📊 Latest observation date: ${latestObs.date}`);
+      logToFile(`📊 Current Federal Funds Rate: ${ratePercent}%`);
       logToFile(`✅ Converted to basis points: ${rateBasisPoints}`);
       
       return rateBasisPoints;
     }
     
-    logToFile(`❌ Could not find observations in response`);
-    logToFile(`Response structure: ${Object.keys(response.data || {})}`);
-    throw new Error("Could not parse ECB response");
+    throw new Error("No observations in FRED response");
     
   } catch (error) {
-    logToFile(`❌ ECB API Error: ${error.message}`);
-    if (error.code) logToFile(`Error code: ${error.code}`);
+    logToFile(`❌ FRED API Error: ${error.message}`);
     if (error.response) {
-      logToFile(`Response status: ${error.response.status}`);
-      logToFile(`Response data: ${JSON.stringify(error.response.data)}`);
-    }
-    if (error.request) {
-      logToFile(`Request was made but no response received`);
+      logToFile(`Status: ${error.response.status}`);
+      logToFile(`Data: ${JSON.stringify(error.response.data)}`);
     }
     logToFile(`⚠️ Using fallback rate: 250 basis points (2.5%)`);
     return 250;
@@ -113,13 +104,22 @@ async function checkBalance(wallet) {
 }
 
 async function main() {
-  logToFile("🚀 Starting InTax rate update with ECB data...");
+  logToFile("🚀 Starting InTax rate update with FRED data...");
   
   try {
     const rate = await getOfficialRate();
     
     const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    
+    // Create wallet with proper formatting
+    let wallet;
+    try {
+      wallet = new ethers.Wallet(`0x${PRIVATE_KEY_HEX}`, provider);
+    } catch (e) {
+      logToFile(`❌ Failed to create wallet: ${e.message}`);
+      return;
+    }
+    
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
     
     if (!await checkBalance(wallet)) {
