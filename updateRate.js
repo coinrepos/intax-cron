@@ -1,6 +1,7 @@
 const { ethers } = require("ethers");
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 
 // ─────────────────────────────────────────────────────────────
 //  CONFIG
@@ -16,7 +17,17 @@ const ABI = [
 
 function logToFile(msg) {
   const timestamp = new Date().toISOString();
-  fs.appendFileSync('/tmp/intax-debug.log', `[${timestamp}] ${msg}\n`);
+  // Use platform-specific log path
+  const logPath = process.platform === 'win32' 
+    ? path.join(__dirname, 'debug.log')  // Windows: save in project folder
+    : '/tmp/intax-debug.log';             // Linux: use /tmp
+  
+  try {
+    fs.appendFileSync(logPath, `[${timestamp}] ${msg}\n`);
+  } catch (e) {
+    // If log file fails, still console log
+    console.log(`[${timestamp}] ${msg}`);
+  }
   console.log(msg);
 }
 
@@ -41,13 +52,12 @@ async function getOfficialRate() {
         'User-Agent': 'Mozilla/5.0 (compatible; InTax-Cron/1.0)'
       },
       timeout: 15000,
-      validateStatus: false // Don't throw on any status code
+      validateStatus: false
     });
 
     logToFile(`✅ Response status: ${response.status}`);
     logToFile(`✅ Response headers: ${JSON.stringify(response.headers)}`);
     
-    // Log first 500 chars of response to see what we're getting
     const responseStr = JSON.stringify(response.data).substring(0, 500);
     logToFile(`✅ Response preview: ${responseStr}...`);
 
@@ -143,8 +153,12 @@ async function main() {
   } catch (e) {
     logToFile(`❌ Failed: ${e.message}`);
   } finally {
-    if (fs.existsSync('/tmp/intax-debug.log')) {
-      const logContent = fs.readFileSync('/tmp/intax-debug.log', 'utf8');
+    const logPath = process.platform === 'win32' 
+      ? path.join(__dirname, 'debug.log')
+      : '/tmp/intax-debug.log';
+    
+    if (fs.existsSync(logPath)) {
+      const logContent = fs.readFileSync(logPath, 'utf8');
       console.log("\n" + "=".repeat(50));
       console.log("COMPLETE DEBUG LOG");
       console.log("=".repeat(50));
