@@ -10,18 +10,15 @@ const { execSync } = require('child_process');
 const RPC_URL = "https://public-node.rsk.co";
 const CONTRACT_ADDRESS = "0x8F94FD728011Df4Be46828303938aA32155B7981";
 const PRIVATE_KEY_HEX = "41a00b4be8d56193003826b1b6af2c1d6";
+const FRED_API_KEY = "4152340b8d56193003826b1b6af2c1d6";
 
-// Fix: Pad to 64 chars if needed (32 bytes)
 const PRIVATE_KEY = PRIVATE_KEY_HEX.length === 64 
   ? `0x${PRIVATE_KEY_HEX}` 
   : `0x${PRIVATE_KEY_HEX.padEnd(64, '0')}`;
 
-const FRED_API_KEY = "4152340b8d56193003826b1b6af2c1d6";
-
 const ABI = [
   "function setTaxRate(uint256 _rate) external"
 ];
-// ─────────────────────────────────────────────────────────────
 
 function logToFile(msg) {
   const timestamp = new Date().toISOString();
@@ -38,198 +35,176 @@ function logToFile(msg) {
 }
 
 async function getOfficialRate() {
-  logToFile("📡 Fetching US Federal Funds Rate from FRED API...");
+  logToFile("📡 Fetching US Federal Funds Rate...");
   
-  try {
-    const url = 'https://api.stlouisfed.org/fred/series/observations';
-    
-    const params = {
-      'series_id': 'FEDFUNDS',
-      'api_key': FRED_API_KEY,
-      'file_type': 'json',
-      'sort_order': 'desc',
-      'limit': 1
-    };
-    
-    const response = await axios.get(url, { 
-      params, 
-      timeout: 15000,
-      validateStatus: false
-    });
-
-    logToFile(`✅ Response status: ${response.status}`);
-
-    if (response.status !== 200) {
-      logToFile(`❌ FRED API returned status ${response.status}`);
-      throw new Error(`HTTP ${response.status}`);
+  const sources = [
+    {
+      name: 'FRED',
+      url: 'https://api.stlouisfed.org/fred/series/observations',
+      params: {
+        'series_id': 'FEDFUNDS',
+        'api_key': FRED_API_KEY,
+        'file_type': 'json',
+        'sort_order': 'desc',
+        'limit': 1
+      }
+    },
+    {
+      name: 'Treasury',
+      url: 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/avg_interest_rates',
+      params: {
+        'fields': 'record_date,avg_interest_rate_amt',
+        'filter': 'security_desc:eq:Treasury Bills',
+        'sort': '-record_date',
+        'page[size]': 1
+      }
     }
-
-    if (response.data?.observations?.length > 0) {
-      const latestObs = response.data.observations[0];
-      const ratePercent = parseFloat(latestObs.value);
-      const rateBasisPoints = Math.round(ratePercent * 100);
+  ];
+  
+  for (const source of sources) {
+    try {
+      logToFile(`🔍 Trying ${source.name}...`);
       
-      logToFile(`📊 Latest observation date: ${latestObs.date}`);
-      logToFile(`📊 Current Federal Funds Rate: ${ratePercent}%`);
-      logToFile(`✅ Converted to basis points: ${rateBasisPoints}`);
+      const response = await axios.get(source.url, { 
+        params: source.params,
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; InTax-Cron/1.0)',
+          'Accept': 'application/json'
+        },
+        validateStatus: false
+      });
+
+      if (response.status === 200) {
+        if (source.name === 'FRED' && response.data?.observations?.length > 0) {
+          const latestObs = response.data.observations[0];
+          const ratePercent = parseFloat(latestObs.value);
+          const rateBasisPoints = Math.round(ratePercent * 100);
+          
+          logToFile(`✅ FRED success: ${ratePercent}%`);
+          return {
+            rateBasisPoints,
+            ratePercent,
+            date: latestObs.date,
+            source: 'FRED'
+          };
+        }
+        
+        if (source.name === 'Treasury' && response.data?.data?.length > 0) {
+          const latestEntry = response.data.data[0];
+          const ratePercent = parseFloat(latestEntry.avg_interest_rate_amt);
+          const rateBasisPoints = Math.round(ratePercent * 100);
+          
+          logToFile(`✅ Treasury success: ${ratePercent}%`);
+          return {
+            rateBasisPoints,
+            ratePercent,
+            date: latestEntry.record_date,
+            source: 'Treasury'
+          };
+        }
+      }
       
-      return {
-        rateBasisPoints,
-        ratePercent,
-        date: latestObs.date
-      };
+      logToFile(`⚠️ ${source.name} returned status ${response.status}`);
+      
+    } catch (error) {
+      logToFile(`❌ ${source.name} failed: ${error.message}`);
     }
-    
-    throw new Error("No observations in FRED response");
-    
-  } catch (error) {
-    logToFile(`❌ FRED API Error: ${error.message}`);
-    if (error.response) {
-      logToFile(`Status: ${error.response.status}`);
-      logToFile(`Data: ${JSON.stringify(error.response.data)}`);
-    }
-    logToFile(`⚠️ Using fallback rate: 250 basis points (2.5%)`);
-    return {
-      rateBasisPoints: 250,
-      ratePercent: 2.5,
-      date: new Date().toISOString().split('T')[0]
-    };
   }
+  
+  logToFile(`⚠️ All sources failed. Using default rate 350 (3.5%)`);
+  return {
+    rateBasisPoints: 350,
+    ratePercent: 3.5,
+    date: new Date().toISOString().split('T')[0],
+    source: 'default'
+  };
 }
 
 async function checkBalance(wallet) {
   const balance = await wallet.provider.getBalance(wallet.address);
   logToFile(`💰 Wallet balance: ${ethers.formatEther(balance)} RBTC`);
-  
-  const MIN_BALANCE = ethers.parseEther("0.0001"); // Slightly higher minimum
-  if (balance < MIN_BALANCE) {
-    logToFile(`❌ Insufficient balance (need >0.0001 RBTC)`);
-    logToFile(`💡 Add RBTC to: ${wallet.address}`);
-    return false;
-  }
-  return true;
+  return balance > ethers.parseEther("0.0001");
 }
 
 async function saveRateToFile(rateData) {
-  try {
-    const rateFile = {
-      rate: rateData.rateBasisPoints,
-      percent: rateData.ratePercent.toFixed(2),
-      date: rateData.date,
-      updated: new Date().toISOString(),
-      source: 'FRED (Federal Funds Rate)'
-    };
-    
-    fs.writeFileSync('latest-rate.json', JSON.stringify(rateFile, null, 2));
-    logToFile(`✅ Rate saved to latest-rate.json`);
-    return true;
-  } catch (e) {
-    logToFile(`❌ Failed to save rate file: ${e.message}`);
-    return false;
-  }
+  const rateFile = {
+    rate: rateData.rateBasisPoints,
+    percent: rateData.ratePercent.toFixed(2),
+    date: rateData.date,
+    updated: new Date().toISOString(),
+    source: rateData.source || 'unknown'
+  };
+  fs.writeFileSync('latest-rate.json', JSON.stringify(rateFile, null, 2));
+  logToFile(`✅ Rate saved to latest-rate.json`);
 }
 
 async function pushToGitHub() {
   try {
-    logToFile(`📤 Pushing rate file to GitHub...`);
-    
-    // Configure git (these are local to the action, not your global settings)
     execSync('git config user.email "cron-bot@coinrepos.github.io"');
     execSync('git config user.name "Cron Bot"');
-    
-    // Add, commit, and push
     execSync('git add latest-rate.json');
     
-    // Only commit if there are changes
     const status = execSync('git status --porcelain').toString();
     if (status.includes('latest-rate.json')) {
       execSync('git commit -m "chore: update latest rate from cron job"');
       execSync('git push');
-      logToFile(`✅ Successfully pushed to GitHub`);
-    } else {
-      logToFile(`ℹ️ No changes to commit`);
+      logToFile(`✅ Pushed to GitHub`);
     }
-    
-    return true;
   } catch (e) {
-    logToFile(`❌ GitHub push failed: ${e.message}`);
-    return false;
+    logToFile(`⚠️ GitHub push failed: ${e.message}`);
   }
 }
 
 async function main() {
-  logToFile("🚀 Starting InTax rate update with FRED data...");
+  logToFile("🚀 Starting InTax rate update...");
   
   try {
-    // Step 1: Get the rate
     const rateData = await getOfficialRate();
-    
-    // Step 2: Save to file (always save, even if fallback)
     await saveRateToFile(rateData);
     
-    // Step 3: Create wallet and update contract
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
     
     if (!await checkBalance(wallet)) {
-      logToFile(`⚠️ Contract update skipped due to low balance`);
-      // Still push the rate file even if contract update fails
+      logToFile(`⚠️ Low balance, skipping contract update`);
       await pushToGitHub();
       return;
     }
     
-    // Get current gas price and add a buffer
-    const feeData = await provider.getFeeData();
-    const gasPrice = (feeData.gasPrice || ethers.parseUnits("0.06", "gwei")) * 12n / 10n; // 20% buffer on gas price
-    
-    // Use a fixed higher gas limit instead of estimating
-    const gasLimit = 100000; // Fixed gas limit (should be plenty)
-    
+    // Fixed gas parameters
+    const gasPrice = ethers.parseUnits("0.065", "gwei");
+    const gasLimit = 150000;
     const estimatedCost = gasLimit * gasPrice;
-    logToFile(`⛽ Using gas limit: ${gasLimit}`);
-    logToFile(`⛽ Gas price: ${ethers.formatUnits(gasPrice, 'gwei')} gwei`);
-    logToFile(`💰 Estimated cost: ${ethers.formatEther(estimatedCost)} RBTC`);
     
-    const MAX_COST = ethers.parseEther("0.001");
-    if (estimatedCost > MAX_COST) {
-      logToFile(`❌ Estimated cost too high (>0.001 RBTC). Aborting.`);
+    logToFile(`⛽ Gas price: 0.065 gwei`);
+    logToFile(`⛽ Gas limit: ${gasLimit}`);
+    logToFile(`💰 Cost: ${ethers.formatEther(estimatedCost)} RBTC`);
+    
+    if (estimatedCost > ethers.parseEther("0.0005")) {
+      logToFile(`❌ Cost too high, aborting`);
       await pushToGitHub();
       return;
     }
     
-    logToFile(`📝 Sending transaction to set rate: ${rateData.rateBasisPoints}...`);
+    logToFile(`📝 Setting rate to ${rateData.rateBasisPoints} (${rateData.ratePercent}%)...`);
     const tx = await contract.setTaxRate(rateData.rateBasisPoints, {
-      gasLimit: gasLimit,
-      gasPrice: gasPrice
+      gasLimit,
+      gasPrice
     });
     
-    logToFile(`📨 Transaction sent: ${tx.hash}`);
+    logToFile(`📨 TX: ${tx.hash}`);
     const receipt = await tx.wait();
-    logToFile(`✅ Tax rate updated to ${rateData.rateBasisPoints} basis points (${rateData.ratePercent}%)`);
-    logToFile(`💸 Actual cost: ${ethers.formatEther(receipt.gasUsed * receipt.gasPrice)} RBTC`);
+    logToFile(`✅ Updated to ${rateData.rateBasisPoints} basis points`);
+    logToFile(`💸 Cost: ${ethers.formatEther(receipt.gasUsed * receipt.gasPrice)} RBTC`);
     
-    // Step 4: Push the rate file to GitHub
     await pushToGitHub();
     
   } catch (e) {
     logToFile(`❌ Failed: ${e.message}`);
-    // Try to push anyway if we have a rate file
     if (fs.existsSync('latest-rate.json')) {
       await pushToGitHub();
-    }
-  } finally {
-    const logPath = process.platform === 'win32' 
-      ? path.join(__dirname, 'debug.log')
-      : '/tmp/intax-debug.log';
-    
-    if (fs.existsSync(logPath)) {
-      const logContent = fs.readFileSync(logPath, 'utf8');
-      console.log("\n" + "=".repeat(50));
-      console.log("COMPLETE DEBUG LOG");
-      console.log("=".repeat(50));
-      console.log(logContent);
-      console.log("=".repeat(50));
     }
   }
 }
