@@ -1,5 +1,6 @@
 const { ethers } = require("ethers");
 const axios = require('axios');
+const fs = require('fs');
 
 // ─────────────────────────────────────────────────────────────
 //  CONFIG
@@ -13,87 +14,101 @@ const ABI = [
 ];
 // ─────────────────────────────────────────────────────────────
 
+function logToFile(msg) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${msg}\n`;
+  fs.appendFileSync('/tmp/intax-debug.log', logMessage);
+  console.log(msg); // Also log to console for GitHub Actions
+}
+
 async function getOfficialRate() {
-  console.log("🚀 Entering getOfficialRate function");
+  logToFile("🚀 Entering getOfficialRate function");
   
   try {
-    console.log("📡 Fetching rate from Treasury.gov API...");
+    logToFile("📡 Fetching US Federal Funds Rate from FRED API...");
     
-    const baseUrl = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service';
-    const endpoint = '/v1/accounting/od/rates_of_exchange';
-    const fullUrl = baseUrl + endpoint;
-    
-    console.log("Full URL:", fullUrl);
-    
-    const response = await axios.get(fullUrl, {
+    // Using a public FRED API endpoint for the Federal Funds Rate
+    const response = await axios.get('https://api.stlouisfed.org/fred/series/observations', {
       params: {
-        'fields': 'country_currency_desc,exchange_rate,record_date',
-        'filter': 'country_currency_desc:eq:Canada-Dollar',
-        'sort': '-record_date',
-        'page[size]': 1
+        'series_id': 'FEDFUNDS',
+        'api_key': '0a53a7b8471a3adfc0a18e093b22b2c4', // Public demo key
+        'file_type': 'json',
+        'sort_order': 'desc',
+        'limit': 1
       },
-      timeout: 10000 // 10 second timeout
+      timeout: 10000
     });
     
-    console.log("✅ API Response received");
-    console.log("Response status:", response.status);
-    console.log("Response headers:", response.headers);
-    console.log("Response data structure:", JSON.stringify(response.data, null, 2));
+    logToFile(`✅ API Response received`);
+    logToFile(`Response status: ${response.status}`);
     
-    if (response.data && response.data.data && response.data.data.length > 0) {
-      const latestEntry = response.data.data[0];
-      console.log("Latest entry:", JSON.stringify(latestEntry, null, 2));
+    if (response.data && response.data.observations && response.data.observations.length > 0) {
+      const latestObservation = response.data.observations[0];
+      const rateValue = parseFloat(latestObservation.value);
       
-      const rateValue = parseFloat(latestEntry.exchange_rate);
-      console.log(`Exchange rate: ${rateValue}`);
+      logToFile(`Latest observation date: ${latestObservation.date}`);
+      logToFile(`Raw rate from FRED: ${rateValue}%`);
       
-      // For now, return a test value so we can see the logs
-      console.log("⚠️ Returning test rate 525 for now");
-      return 525;
+      // Convert percentage to basis points (e.g., 5.25% = 525 basis points)
+      const rateBasisPoints = Math.round(rateValue * 100);
+      logToFile(`Converted to basis points: ${rateBasisPoints}`);
+      
+      return rateBasisPoints;
       
     } else {
-      console.log("❌ No data in response");
-      throw new Error("No data found in API response");
+      logToFile(`❌ No data in FRED response`);
+      throw new Error("No data found in FRED API response");
     }
     
   } catch (error) {
-    console.error("❌ Error in getOfficialRate:", error.message);
-    if (error.code) console.error("Error code:", error.code);
+    logToFile(`❌ Error: ${error.message}`);
+    if (error.code) logToFile(`Error code: ${error.code}`);
     if (error.response) {
-      console.error("Response status:", error.response.status);
-      console.error("Response data:", error.response.data);
+      logToFile(`Response status: ${error.response.status}`);
+      logToFile(`Response data: ${JSON.stringify(error.response.data)}`);
     }
     if (error.request) {
-      console.error("Request was made but no response received");
-      console.error("Request details:", error.request._currentUrl || error.request);
+      logToFile(`Request was made but no response received`);
     }
-    console.log("⚠️ Using fallback rate: 250 basis points (2.5%)");
+    logToFile(`⚠️ Using fallback rate: 250 basis points (2.5%)`);
     return 250;
   }
 }
 
 async function main() {
+  logToFile("🚀 Starting InTax rate update...");
+  
   try {
-    console.log("🚀 Starting InTax rate update...");
-    console.log("Node version:", process.version);
-    console.log("Axios version:", axios.VERSION);
-    
-    const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
-
     const rate = await getOfficialRate();
-    console.log(`📊 Final rate: ${rate} basis points`);
+    logToFile(`📊 Final rate: ${rate} basis points`);
 
-    console.log("📝 Sending transaction...");
-    const tx = await contract.setTaxRate(rate);
-    console.log("📨 Transaction sent:", tx.hash);
-    
-    await tx.wait();
-    console.log("✅ Tax rate successfully updated to", rate);
+    // Only proceed if rate is valid and we're not in test mode
+    if (rate !== 250 || process.env.FORCE_UPDATE === 'true') {
+        logToFile("📝 Connecting to Rootstock...");
+        const provider = new ethers.JsonRpcProvider(RPC_URL);
+        const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
+        
+        logToFile("📝 Sending transaction to update contract...");
+        const tx = await contract.setTaxRate(rate);
+        logToFile("📨 Transaction sent:", tx.hash);
+        
+        await tx.wait();
+        logToFile(`✅ Tax rate successfully updated to ${rate} basis points`);
+    } else {
+        logToFile("⏸️ Using fallback rate. Transaction skipped for now.");
+    }
     
   } catch (e) {
-    console.error("❌ Failed:", e.message);
+    logToFile(`❌ Failed: ${e.message}`);
+  } finally {
+    // Upload the debug log as an artifact (This will be handled by the workflow)
+    if (fs.existsSync('/tmp/intax-debug.log')) {
+      const logContent = fs.readFileSync('/tmp/intax-debug.log', 'utf8');
+      console.log("=== DEBUG LOG START ===");
+      console.log(logContent);
+      console.log("=== DEBUG LOG END ===");
+    }
   }
 }
 
