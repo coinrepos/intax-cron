@@ -16,25 +16,23 @@ const ABI = [
 
 function logToFile(msg) {
   const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${msg}\n`;
-  fs.appendFileSync('/tmp/intax-debug.log', logMessage);
-  console.log(msg); // Also log to console for GitHub Actions
+  fs.appendFileSync('/tmp/intax-debug.log', `[${timestamp}] ${msg}\n`);
+  console.log(msg); // Also log to console
 }
 
 async function getOfficialRate() {
   logToFile("🚀 Entering getOfficialRate function");
   
   try {
-    logToFile("📡 Fetching US Federal Funds Rate from FRED API...");
+    logToFile("📡 Fetching rate from Treasury.gov API...");
     
-    // Using a public FRED API endpoint for the Federal Funds Rate
-    const response = await axios.get('https://api.stlouisfed.org/fred/series/observations', {
+    // Using Treasury API - no key required
+    const response = await axios.get('https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/avg_interest_rates', {
       params: {
-        'series_id': 'FEDFUNDS',
-        'api_key': '0a53a7b8471a3adfc0a18e093b22b2c4', // Public demo key
-        'file_type': 'json',
-        'sort_order': 'desc',
-        'limit': 1
+        'fields': 'record_date,avg_interest_rate_amt',
+        'filter': 'security_desc:eq:Treasury Bills',
+        'sort': '-record_date',
+        'page[size]': 1
       },
       timeout: 10000
     });
@@ -42,33 +40,29 @@ async function getOfficialRate() {
     logToFile(`✅ API Response received`);
     logToFile(`Response status: ${response.status}`);
     
-    if (response.data && response.data.observations && response.data.observations.length > 0) {
-      const latestObservation = response.data.observations[0];
-      const rateValue = parseFloat(latestObservation.value);
+    if (response.data && response.data.data && response.data.data.length > 0) {
+      const latestEntry = response.data.data[0];
+      const rateValue = parseFloat(latestEntry.avg_interest_rate_amt);
       
-      logToFile(`Latest observation date: ${latestObservation.date}`);
-      logToFile(`Raw rate from FRED: ${rateValue}%`);
+      logToFile(`Latest rate date: ${latestEntry.record_date}`);
+      logToFile(`Raw rate from Treasury: ${rateValue}%`);
       
-      // Convert percentage to basis points (e.g., 5.25% = 525 basis points)
+      // Convert percentage to basis points
       const rateBasisPoints = Math.round(rateValue * 100);
       logToFile(`Converted to basis points: ${rateBasisPoints}`);
       
       return rateBasisPoints;
       
     } else {
-      logToFile(`❌ No data in FRED response`);
-      throw new Error("No data found in FRED API response");
+      logToFile(`❌ No data in Treasury response`);
+      throw new Error("No data found in Treasury API response");
     }
     
   } catch (error) {
     logToFile(`❌ Error: ${error.message}`);
-    if (error.code) logToFile(`Error code: ${error.code}`);
     if (error.response) {
       logToFile(`Response status: ${error.response.status}`);
       logToFile(`Response data: ${JSON.stringify(error.response.data)}`);
-    }
-    if (error.request) {
-      logToFile(`Request was made but no response received`);
     }
     logToFile(`⚠️ Using fallback rate: 250 basis points (2.5%)`);
     return 250;
@@ -82,7 +76,7 @@ async function main() {
     const rate = await getOfficialRate();
     logToFile(`📊 Final rate: ${rate} basis points`);
 
-    // Only proceed if rate is valid and we're not in test mode
+    // Only proceed if rate is valid and not the fallback (or forced)
     if (rate !== 250 || process.env.FORCE_UPDATE === 'true') {
         logToFile("📝 Connecting to Rootstock...");
         const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -91,23 +85,23 @@ async function main() {
         
         logToFile("📝 Sending transaction to update contract...");
         const tx = await contract.setTaxRate(rate);
-        logToFile("📨 Transaction sent:", tx.hash);
+        logToFile(`📨 Transaction sent: ${tx.hash}`);
         
         await tx.wait();
         logToFile(`✅ Tax rate successfully updated to ${rate} basis points`);
     } else {
-        logToFile("⏸️ Using fallback rate. Transaction skipped for now.");
+        logToFile("⏸️ Using fallback rate. Transaction skipped (set FORCE_UPDATE=true to override)");
     }
     
   } catch (e) {
     logToFile(`❌ Failed: ${e.message}`);
   } finally {
-    // Upload the debug log as an artifact (This will be handled by the workflow)
+    // Output the debug log for GitHub Actions to capture
     if (fs.existsSync('/tmp/intax-debug.log')) {
       const logContent = fs.readFileSync('/tmp/intax-debug.log', 'utf8');
-      console.log("=== DEBUG LOG START ===");
+      console.log("\n=== DEBUG LOG START ===");
       console.log(logContent);
-      console.log("=== DEBUG LOG END ===");
+      console.log("=== DEBUG LOG END ===\n");
     }
   }
 }
