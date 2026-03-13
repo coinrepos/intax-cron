@@ -8,7 +8,7 @@ const path = require('path');
 // ─────────────────────────────────────────────────────────────
 const RPC_URL = "https://public-node.rsk.co";
 const CONTRACT_ADDRESS = "0x8F94FD728011Df4Be46828303938aA32155B7981";
-const PRIVATE_KEY_HEX = "41a00b4be8d56193003826b1b6af2c1d6";
+const PRIVATE_KEY_HEX = "41a00b4be3155da5177389d9ad564099312b73c675b30f001eccb0a370f94acd";
 
 // Fix: Pad to 64 chars if needed (32 bytes)
 const PRIVATE_KEY = PRIVATE_KEY_HEX.length === 64 
