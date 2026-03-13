@@ -5,20 +5,18 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 // ─────────────────────────────────────────────────────────────
-//  CONFIG — VERIFIED AND SIMPLIFIED
+//  CONFIG
 // ─────────────────────────────────────────────────────────────
 const RPC_URL = "https://public-node.rsk.co";
 const CONTRACT_ADDRESS = "0x8F94FD728011Df4Be46828303938aA32155B7981";
 const PRIVATE_KEY_HEX = "41a00b4be8d56193003826b1b6af2c1d6";
 const FRED_API_KEY = "4152340b8d56193003826b1b6af2c1d6";
 
-// Ensure private key is formatted correctly for ethers v6
 const PRIVATE_KEY = PRIVATE_KEY_HEX.startsWith('0x') ? PRIVATE_KEY_HEX : `0x${PRIVATE_KEY_HEX}`;
 
 const ABI = [
   "function setTaxRate(uint256 _rate) external"
 ];
-// ─────────────────────────────────────────────────────────────
 
 function logToFile(msg) {
   const timestamp = new Date().toISOString();
@@ -34,7 +32,6 @@ function logToFile(msg) {
   console.log(msg);
 }
 
-// SIMPLIFIED RATE FETCHING WITH AGGRESSIVE DEBUGGING
 async function getOfficialRate() {
   logToFile("🔍 DEBUG: Entering getOfficialRate function.");
   
@@ -54,13 +51,13 @@ async function getOfficialRate() {
     const response = await axios.get(url, { 
       params, 
       timeout: 15000,
-      validateStatus: false // Don't throw on non-200 statuses
+      validateStatus: false
     });
 
     logToFile(`🔍 DEBUG: FRED Response Status: ${response.status}`);
     
     if (response.status !== 200) {
-        logToFile(`🔍 DEBUG: FRED Response Data (first 500 chars): ${JSON.stringify(response.data)?.substring(0, 500)}`);
+        logToFile(`🔍 DEBUG: FRED Response Data: ${JSON.stringify(response.data)?.substring(0, 500)}`);
         throw new Error(`FRED API returned status ${response.status}`);
     }
 
@@ -92,7 +89,6 @@ async function getOfficialRate() {
       logToFile(`Request was made but no response received. Network issue?`);
     }
     
-    // ULTIMATE FALLBACK: Use a very recent realistic rate (e.g., 4.5% = 450 basis points)
     logToFile(`⚠️ Using hardcoded fallback rate: 450 basis points (4.5%)`);
     return {
       rateBasisPoints: 450,
@@ -147,25 +143,17 @@ async function main() {
   logToFile("🚀 Starting InTax rate update with SIMPLIFIED logic...");
   
   try {
-    // 1. Get the rate (this will log extensively)
     const rateData = await getOfficialRate();
-    
-    // 2. Save rate to file (always do this)
     await saveRateToFile(rateData);
     
-    // 3. CONTRACT UPDATE WITH SIMPLE, FIXED GAS
     logToFile("🔌 Connecting to Rootstock...");
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
     
-    // Check wallet balance
     const balance = await provider.getBalance(wallet.address);
     logToFile(`💰 Wallet balance: ${ethers.formatEther(balance)} RBTC`);
     
-    // --- SIMPLIFIED GAS ---
-    // Use a fixed gas price (0.065 Gwei) and a safe gas limit (150,000)
-    // This bypasses all estimation issues. [citation:1][citation:7]
     const gasPrice = ethers.parseUnits("0.065", "gwei");
     const gasLimit = 150000;
     const estimatedCost = gasLimit * gasPrice;
@@ -174,14 +162,12 @@ async function main() {
     logToFile(`⛽ Fixed Gas Limit: ${gasLimit}`);
     logToFile(`💰 Estimated Cost: ${ethers.formatEther(estimatedCost)} RBTC`);
 
-    // Ensure cost is reasonable (should be < 0.00001 RBTC)
     if (estimatedCost > ethers.parseEther("0.001")) {
         logToFile(`❌ Estimated cost > 0.001 RBTC, aborting for safety.`);
         await pushToGitHub();
         return;
     }
     
-    // Ensure we have enough balance (need at least 2x the estimated cost for safety)
     if (balance < estimatedCost * 2n) {
         logToFile(`❌ Insufficient balance. Have ${ethers.formatEther(balance)}, need ~${ethers.formatEther(estimatedCost * 2n)}. Aborting.`);
         await pushToGitHub();
@@ -202,13 +188,11 @@ async function main() {
     logToFile(`📦 Block: ${receipt.blockNumber}`);
     logToFile(`💸 Actual cost: ${ethers.formatEther(receipt.gasUsed * receipt.gasPrice)} RBTC`);
     
-    // 4. Push the rate file to GitHub
     await pushToGitHub();
     
   } catch (e) {
     logToFile(`❌ MAIN FUNCTION FAILED: ${e.message}`);
     console.error(e);
-    // Try to push any existing rate file
     if (fs.existsSync('latest-rate.json')) {
       await pushToGitHub();
     }
