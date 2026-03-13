@@ -101,9 +101,9 @@ async function checkBalance(wallet) {
   const balance = await wallet.provider.getBalance(wallet.address);
   logToFile(`💰 Wallet balance: ${ethers.formatEther(balance)} RBTC`);
   
-  const MIN_BALANCE = ethers.parseEther("0.00005");
+  const MIN_BALANCE = ethers.parseEther("0.0001"); // Slightly higher minimum
   if (balance < MIN_BALANCE) {
-    logToFile(`❌ Insufficient balance (need >0.00005 RBTC)`);
+    logToFile(`❌ Insufficient balance (need >0.0001 RBTC)`);
     logToFile(`💡 Add RBTC to: ${wallet.address}`);
     return false;
   }
@@ -179,12 +179,17 @@ async function main() {
       return;
     }
     
-    const gasEstimate = await contract.setTaxRate.estimateGas(rateData.rateBasisPoints);
+    // Get current gas price and add a buffer
     const feeData = await provider.getFeeData();
-    const gasPrice = feeData.gasPrice || ethers.parseUnits("0.06", "gwei");
+    const gasPrice = (feeData.gasPrice || ethers.parseUnits("0.06", "gwei")) * 12n / 10n; // 20% buffer on gas price
     
-    const estimatedCost = gasEstimate * gasPrice;
-    logToFile(`⛽ Estimated cost: ${ethers.formatEther(estimatedCost)} RBTC`);
+    // Use a fixed higher gas limit instead of estimating
+    const gasLimit = 100000; // Fixed gas limit (should be plenty)
+    
+    const estimatedCost = gasLimit * gasPrice;
+    logToFile(`⛽ Using gas limit: ${gasLimit}`);
+    logToFile(`⛽ Gas price: ${ethers.formatUnits(gasPrice, 'gwei')} gwei`);
+    logToFile(`💰 Estimated cost: ${ethers.formatEther(estimatedCost)} RBTC`);
     
     const MAX_COST = ethers.parseEther("0.001");
     if (estimatedCost > MAX_COST) {
@@ -195,7 +200,7 @@ async function main() {
     
     logToFile(`📝 Sending transaction to set rate: ${rateData.rateBasisPoints}...`);
     const tx = await contract.setTaxRate(rateData.rateBasisPoints, {
-      gasLimit: gasEstimate * 120n / 100n,
+      gasLimit: gasLimit,
       gasPrice: gasPrice
     });
     
