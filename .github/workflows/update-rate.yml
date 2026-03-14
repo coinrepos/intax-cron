@@ -6,24 +6,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  update:
+  update-rate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
           
       - run: npm install
       
-      - run: node updateRate.js
+      - name: Run the rate update script
+        run: node updateRate.js
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           
-      - name: Upload debug logs
-        if: always()  # This ensures logs are uploaded even if the script fails
-        uses: actions/upload-artifact@v3
+      - name: Upload debug logs (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: debug-logs
           path: /tmp/intax-debug.log
+
+  # This new job depends on 'update-rate' and deploys to Pages
+  deploy-to-pages:
+    needs: update-rate  # This is the key - it waits for the first job
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write      # Grants permission to deploy to Pages
+      id-token: write   # Required for Pages deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/configure-pages@v5
+      
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'  # Uploads the entire repo, which includes latest-rate.json
+          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
